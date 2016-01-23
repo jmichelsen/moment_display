@@ -1,29 +1,23 @@
 import wx
 import time
 import sys
-import os
 
 import gettext
 
 from .image import prep_image
-
+from .feed import FeedManager
 
 class ImagePanel(wx.Panel):
     def __init__(self, parent):
+        self.feed_manager = FeedManager()
         wx.Panel.__init__(self, parent)
-        image_path = os.path.join(os.getcwd(), 'testimages')
-        self.image_files = [os.path.join(image_path, f) for f in
-                            os.listdir(image_path)]
         self.update_count = 0
         self.bitmap1 = None
-        self.update_image()
 
-    def update_image(self):
+    def update_image(self, width, height):
         try:
-            image_index = self.update_count % len(self.image_files)
-            filename = self.image_files[image_index]
-            pil_image = prep_image(filename,
-                                    *wx.DisplaySize())
+            filename = self.feed_manager.get_random_photo()
+            pil_image = prep_image(filename, width, height)
             self.update_count += 1
 
             outfile = '/tmp/SuperDPF-image.jpg'
@@ -46,31 +40,32 @@ class ImagePanel(wx.Panel):
         except IOError as e:
             print e
             raise SystemExit
+        except NotRegisteredError as reg_error:
+            reg_error.code
 
 
 class MyFrame(wx.Frame):
     def __init__(self, *args, **kwds):
         wx.Frame.__init__(self, *args, **kwds)
 
-        self.width, self.height = wx.DisplaySize()
-        print "Targeting images for {}x{}".format(self.width, self.height)
-
         self.client = ImagePanel(self)
         self.client.SetFocus()
 
+        self.ShowFullScreen(True, 0)
+        # self.client.update_image(self.Size.width, self.Size.height)
+
         self.timer = wx.Timer(self)
         self.Bind(wx.EVT_TIMER, self.update, self.timer)
-        self.timer.Start(2000)
-
-        self.ShowFullScreen(True, 0)
+        # A brief sleep allows ShowFullScreen to finish before displaying images
+        self.timer.Start(500)
 
         self.Bind(wx.EVT_CHAR_HOOK, self.OnKeyUP)
 
     def update(self, event):
         print "Updated: {}".format(time.ctime())
         self.timer.Stop()
-        self.client.update_image()
-        self.timer.Start(2000)
+        self.client.update_image(self.Size.width, self.Size.height)
+        self.timer.Start(12000)
 
     def OnKeyUP(self, event):
         code = event.GetKeyCode()

@@ -1,6 +1,5 @@
-from time import time
-import wx
-from PIL import Image, ImageFilter
+import os
+from PIL import Image, ImageFilter, ImageDraw, ImageFont
 
 
 def scale_display_size(display_tuple, factor):
@@ -12,7 +11,7 @@ def prep_image(filename, width, height):
     with open(filename) as imagefile:
         # Copy the image in memory to avoid closed file errors later
         img = Image.open(imagefile)
-        if img.size == wx.DisplaySize():
+        if img.size == (width, height):
             print "No prep for {}".format(filename)
             return img.copy()
         background = img.copy()
@@ -20,12 +19,12 @@ def prep_image(filename, width, height):
 
     print "prep_image({}) {} -> {}".format(filename,
                                            img.size,
-                                           wx.DisplaySize())
+                                           (width, height))
 
-    background = background.resize(scale_display_size(wx.DisplaySize(), 0.1),
+    background = background.resize(scale_display_size((width, height), 0.1),
                                    Image.ANTIALIAS)
     background = background.filter(ImageFilter.GaussianBlur(radius=5))
-    background = background.resize(wx.DisplaySize(),
+    background = background.resize((width, height),
                                    Image.ANTIALIAS)
 
     new_height = width * h / w
@@ -41,4 +40,14 @@ def prep_image(filename, width, height):
         background.paste(new_image, (0, top_margin))
         return background
     else:
-        return img.resize(wx.DisplaySize(), Image.ANTIALIAS)
+        return img.resize((width, height), Image.ANTIALIAS)
+
+
+def draw_image_message_file(filename, message):
+    image = Image.new("RGBA", (4800, 2800), (255, 255, 255))
+    draw = ImageDraw.Draw(image)
+    font_file = os.path.join(os.path.dirname(__file__), 'FreeSans.ttf')
+    font = ImageFont.truetype(font_file, 75)
+    for num, line in enumerate(message.split('\n')):
+        draw.text((10, 70*num), line, (0, 0, 0), font=font)
+    image.save(filename)

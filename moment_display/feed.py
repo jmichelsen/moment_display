@@ -1,9 +1,13 @@
 import os
 import json
+import hashlib
+import random
+
 import requests
 
-MOMENT_HOME = os.environ.get("MOMENT_HOME", os.path.expanduser('~/.MomentHome'))
+from .image import draw_image_message_file
 
+MOMENT_HOME = os.environ.get("MOMENT_HOME", os.path.expanduser('~/.MomentHome'))
 
 _CONFIG_DEFAULTS = (
     ('base_url', 'http://localhost:8000'),
@@ -30,7 +34,7 @@ class MomentConfig(object):
                 with open(self.cfg_file) as cfg:
                     self.cfg_dict = json.loads(cfg.read())
             except Exception as e:
-                print e
+                print "Error loading config: {}".format(e)
 
         for key, default in _CONFIG_DEFAULTS:
             setattr(self, key, self.cfg_dict.get(key, default))
@@ -51,6 +55,17 @@ class MomentConfig(object):
     def feed_url(self):
         return "{}/api/v1/feed/master".format(self.base_url)
 
+    @property
+    def image_dir(self):
+        dir_name = os.path.join(MOMENT_HOME, 'image_cache')
+        if not os.path.isdir(dir_name):
+            os.mkdir(dir_name)
+        return dir_name
+
+    @property
+    def registration_image_filename(self):
+        return os.path.join(MOMENT_HOME, 'registration-code.png')
+
 
 class FeedManager(object):
     def __init__(self):
@@ -61,6 +76,13 @@ class FeedManager(object):
         reg_info = reg.json()
         self.config.moment_token = reg_info.get('token')
         self.config.registration_code = reg_info.get('registration_code')
+
+        filename = self.config.registration_image_filename
+        msg = "Registration Code: {}\n" \
+              "Register at /accounts/devices/register".format(
+            self.config.registration_code)
+        draw_image_message_file(filename, msg)
+
         self.config.save()
 
     @property
@@ -71,11 +93,47 @@ class FeedManager(object):
 
         reg = requests.get(self.config.registration_url,
                            params={'device_token': self.config.moment_token})
-        registration_status = reg.json()
-        return registration_status.get('registered', False)
+        status = reg.json()
+        if not status.get('registered') and \
+            not status.get('pending_registration'):
+            self.begin_registration()
+            return False
+        return status.get('registered', False)
 
     def get_photo_feed(self):
         res = requests.get(self.config.feed_url,
                            params={'device_token': self.config.moment_token})
         feed_data = res.json()
         return feed_data.get('images', list())
+
+    def fetch_photos(self):
+        image_list = self.get_photo_feed()
+        last_photo = None
+        for img_file in image_list:
+            base, ext = os.path.splitext(img_file)
+            if ext in ['.gif']:
+                continue
+            filename_hash = hashlib.sha1()
+            filename_hash.update(base)
+            cache_filename = os.path.join(self.config.image_dir,
+                                          filename_hash.hexdigest()+ext)
+            if not os.path.isfile(cache_filename):
+                r = requests.get(img_file)
+                with open(cache_filename, 'wb') as cache_file:
+                    for chunk in r.iter_content(chunk_size=512*1024):
+                        cache_file.write(chunk)
+
+            last_photo = cache_filename
+        return last_photo
+
+    def get_random_photo(self):
+        image_list = [os.path.join(self.config.image_dir, f) for f in
+                      os.listdir(self.config.image_dir)]
+
+        if not self.is_registered:
+            return self.config.registration_image_filename
+
+        if not image_list:
+            return self.fetch_photos()
+
+        return random.choice(image_list)
