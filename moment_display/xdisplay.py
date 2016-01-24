@@ -1,6 +1,7 @@
 import wx
 import time
 import sys
+import traceback
 
 import gettext
 
@@ -40,8 +41,9 @@ class ImagePanel(wx.Panel):
         except IOError as e:
             print e
             raise SystemExit
-        except NotRegisteredError as reg_error:
-            reg_error.code
+        except Exception as e:
+            print "Unexpected exception while updating image: {}".format(e)
+            traceback.print_exc()
 
 
 class MyFrame(wx.Frame):
@@ -65,7 +67,7 @@ class MyFrame(wx.Frame):
         print "Updated: {}".format(time.ctime())
         self.timer.Stop()
         self.client.update_image(self.Size.width, self.Size.height)
-        self.timer.Start(12000)
+        self.timer.Start(self.client.feed_manager.next_sleep)
 
     def OnKeyUP(self, event):
         code = event.GetKeyCode()

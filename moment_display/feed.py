@@ -12,7 +12,8 @@ MOMENT_HOME = os.environ.get("MOMENT_HOME", os.path.expanduser('~/.MomentHome'))
 _CONFIG_DEFAULTS = (
     ('base_url', 'http://localhost:8000'),
     ('moment_token', None),
-    ('registration_code', None)
+    ('registration_code', None),
+    ('photo_display_seconds', 15),
 )
 
 
@@ -66,10 +67,15 @@ class MomentConfig(object):
     def registration_image_filename(self):
         return os.path.join(MOMENT_HOME, 'registration-code.png')
 
+    @property
+    def empty_feed_image_filename(self):
+        return os.path.join(MOMENT_HOME, 'empty-feed.png')
+
 
 class FeedManager(object):
     def __init__(self):
         self.config = MomentConfig()
+        self._last_registration_status = False
 
     def begin_registration(self):
         reg = requests.put(self.config.registration_url)
@@ -87,6 +93,10 @@ class FeedManager(object):
 
     @property
     def is_registered(self):
+        self._last_registration_status = self.update_registration_status()
+        return self._last_registration_status
+
+    def update_registration_status(self):
         if not self.config.moment_token:
             self.begin_registration()
             return False
@@ -134,6 +144,22 @@ class FeedManager(object):
             return self.config.registration_image_filename
 
         if not image_list:
-            return self.fetch_photos()
+            last_photo = self.fetch_photos()
+            if not last_photo:
+                if not os.path.isfile(self.config.empty_feed_image_filename):
+                    draw_image_message_file(
+                        self.config.empty_feed_image_filename,
+                        "No images found in feed"
+                    )
+                return self.config.empty_feed_image_filename
+            return last_photo
 
         return random.choice(image_list)
+
+    @property
+    def next_sleep(self):
+        # Returns milliseconds
+        if self._last_registration_status:
+            return self.config.photo_display_seconds * 1000
+        else:
+            return 2500
