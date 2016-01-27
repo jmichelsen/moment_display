@@ -1,13 +1,15 @@
 import os
 import json
-import hashlib
 import random
+import time
+import threading
 
 import requests
 
-from .image import draw_image_message_file
+from django.conf import settings
 
-MOMENT_HOME = os.environ.get("MOMENT_HOME", os.path.expanduser('~/.MomentHome'))
+from .image import draw_image_message_file
+from .models import Feed
 
 _CONFIG_DEFAULTS = (
     ('base_url', 'http://localhost:8000'),
@@ -19,7 +21,7 @@ _CONFIG_DEFAULTS = (
 
 class MomentConfig(object):
     def __init__(self):
-        self.cfg_file = os.path.join(MOMENT_HOME, 'moment.cfg')
+        self.cfg_file = os.path.join(settings.MOMENT_HOME, 'moment.cfg')
         self.load()
 
         try:
@@ -58,18 +60,18 @@ class MomentConfig(object):
 
     @property
     def image_dir(self):
-        dir_name = os.path.join(MOMENT_HOME, 'image_cache')
+        dir_name = os.path.join(settings.MOMENT_HOME, 'image_cache')
         if not os.path.isdir(dir_name):
             os.mkdir(dir_name)
         return dir_name
 
     @property
     def registration_image_filename(self):
-        return os.path.join(MOMENT_HOME, 'registration-code.png')
+        return os.path.join(settings.MOMENT_HOME, 'registration-code.png')
 
     @property
     def empty_feed_image_filename(self):
-        return os.path.join(MOMENT_HOME, 'empty-feed.png')
+        return os.path.join(settings.MOMENT_HOME, 'empty-feed.png')
 
 
 class FeedManager(object):
@@ -110,51 +112,36 @@ class FeedManager(object):
             return False
         return status.get('registered', False)
 
-    def get_photo_feed(self):
-        res = requests.get(self.config.feed_url,
-                           params={'device_token': self.config.moment_token})
-        feed_data = res.json()
-        return feed_data.get('images', list())
-
-    def fetch_photos(self):
-        image_list = self.get_photo_feed()
-        last_photo = None
-        for img_file in image_list:
-            base, ext = os.path.splitext(img_file)
-            if ext in ['.gif']:
-                continue
-            filename_hash = hashlib.sha1()
-            filename_hash.update(base)
-            cache_filename = os.path.join(self.config.image_dir,
-                                          filename_hash.hexdigest()+ext)
-            if not os.path.isfile(cache_filename):
-                r = requests.get(img_file)
-                with open(cache_filename, 'wb') as cache_file:
-                    for chunk in r.iter_content(chunk_size=512*1024):
-                        cache_file.write(chunk)
-
-            last_photo = cache_filename
-        return last_photo
-
     def get_random_photo(self):
-        image_list = [os.path.join(self.config.image_dir, f) for f in
-                      os.listdir(self.config.image_dir)]
+        image_qs = Feed.objects.available_photos()
 
         if not self.is_registered:
             return self.config.registration_image_filename
 
-        if not image_list:
-            last_photo = self.fetch_photos()
-            if not last_photo:
+        if not image_qs:
+            qs = Feed.objects.download_queue()
+            # Block getting a limited set to make sure something is available
+            refresh_feed(self.config, limit=1)
+
+            # We probably just got registered so start a full feed refresh
+            OneTimeRefreshThread().start()
+            if qs:
+                print "Downloading first image"
+                image = qs.first()
+                download_feed_item(image)
+                return self._image_filename(image)
+            else:
                 if not os.path.isfile(self.config.empty_feed_image_filename):
                     draw_image_message_file(
                         self.config.empty_feed_image_filename,
                         "No images found in feed"
                     )
                 return self.config.empty_feed_image_filename
-            return last_photo
 
-        return random.choice(image_list)
+        return self._image_filename(random.choice(image_qs))
+
+    def _image_filename(self, image_rec):
+        return os.path.join(self.config.image_dir, image_rec.local_filename)
 
     @property
     def next_sleep(self):
@@ -163,3 +150,88 @@ class FeedManager(object):
             return self.config.photo_display_seconds * 1000
         else:
             return 2500
+
+
+def download_feed_item(item, config=None):
+    if not config:
+        config = MomentConfig()
+    result = requests.get(item.url)
+    filename = os.path.join(config.image_dir,
+                            item.local_filename)
+    dirname = os.path.dirname(filename)
+    if not os.path.isdir(dirname):
+        os.mkdir(dirname)
+
+    with open(filename, 'wb') as cache_file:
+        for chunk in result.iter_content(chunk_size=512*1024):
+            cache_file.write(chunk)
+
+    item.downloaded = True
+    item.save()
+
+
+class DownloadThread(threading.Thread):
+    daemon = True
+
+    def run(self):
+        fm = FeedManager()
+        # Sleep initially to give RefreshFeedThread time to run
+        time.sleep(30)
+        while True:
+            qs = Feed.objects.download_queue()
+            for item in qs:
+                print "Downloading image: {}".format(item.local_filename)
+                download_feed_item(item, fm.config)
+                time.sleep(10)
+
+            print "DownloadThread sleeping..."
+            time.sleep(300)
+
+
+def refresh_feed(config, limit=None):
+    res = requests.get(config.feed_url,
+               params={'device_token': config.moment_token})
+    feed_data = res.json()
+    created = 0
+    for item in feed_data.get('images', list()):
+        try:
+            Feed.objects.get(provider_name=item['provider_name'],
+                             feeditem_pk=item['feeditem_pk'])
+        except Feed.DoesNotExist:
+            rec = Feed.objects.create(**item)
+            created += 1
+            print "Added file: {}".format(rec.local_filename)
+            if limit and created >= limit:
+                break
+
+
+class RefreshFeedThread(threading.Thread):
+    daemon = True
+
+    def run(self):
+        fm = FeedManager()
+        while True:
+            refresh_feed(fm.config)
+
+            print "Feed refresh sleeping..."
+            time.sleep(600)
+
+
+class OneTimeRefreshThread(threading.Thread):
+    daemon = True
+
+    def run(self):
+        print "Starting one time refresh..."
+        fm = FeedManager()
+        # Get enough images to display while the full feed downloads
+        refresh_feed(fm.config, limit=20)
+
+        # Limit queryset in case another feed refresh expanded it
+        for item in Feed.objects.download_queue()[:20]:
+            print "Downloading image: {}".format(item.local_filename)
+            download_feed_item(item, fm.config)
+        print "Initial download in one time refresh completed..."
+
+        # Get everything from feed, but leave for the normal download thread
+        refresh_feed(fm.config)
+        print "Finishing one time refresh..."
