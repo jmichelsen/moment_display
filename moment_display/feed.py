@@ -1,16 +1,15 @@
 import os
 import json
-import hashlib
 import random
-from threading import Lock
-import sqlite3
-from contextlib import contextmanager
+import time
+import threading
 
 import requests
 
-from .image import draw_image_message_file
+from django.conf import settings
 
-MOMENT_HOME = os.environ.get("MOMENT_HOME", os.path.expanduser('~/.MomentHome'))
+from .image import draw_image_message_file
+from .models import Feed
 
 _CONFIG_DEFAULTS = (
     ('base_url', 'http://localhost:8000'),
@@ -22,7 +21,7 @@ _CONFIG_DEFAULTS = (
 
 class MomentConfig(object):
     def __init__(self):
-        self.cfg_file = os.path.join(MOMENT_HOME, 'moment.cfg')
+        self.cfg_file = os.path.join(settings.MOMENT_HOME, 'moment.cfg')
         self.load()
 
         try:
@@ -61,25 +60,24 @@ class MomentConfig(object):
 
     @property
     def image_dir(self):
-        dir_name = os.path.join(MOMENT_HOME, 'image_cache')
+        dir_name = os.path.join(settings.MOMENT_HOME, 'image_cache')
         if not os.path.isdir(dir_name):
             os.mkdir(dir_name)
         return dir_name
 
     @property
     def registration_image_filename(self):
-        return os.path.join(MOMENT_HOME, 'registration-code.png')
+        return os.path.join(settings.MOMENT_HOME, 'registration-code.png')
 
     @property
     def empty_feed_image_filename(self):
-        return os.path.join(MOMENT_HOME, 'empty-feed.png')
+        return os.path.join(settings.MOMENT_HOME, 'empty-feed.png')
 
 
 class FeedManager(object):
     def __init__(self):
         self.config = MomentConfig()
         self._last_registration_status = False
-        self.db = FeedDatabase()
 
     def begin_registration(self):
         reg = requests.put(self.config.registration_url)
@@ -114,62 +112,36 @@ class FeedManager(object):
             return False
         return status.get('registered', False)
 
-    def get_photo_feed(self):
-        res = requests.get(self.config.feed_url,
-                           params={'device_token': self.config.moment_token})
-        feed_data = res.json()
-        return feed_data.get('images', list())
-
-    def fetch_photos(self):
-        image_list = self.get_photo_feed()
-        last_photo = None
-        for img_file in image_list:
-            base, ext = os.path.splitext(img_file)
-            if ext in ['.gif']:
-                continue
-            filename_hash = hashlib.sha1()
-            filename_hash.update(base)
-            cache_filename = os.path.join(self.config.image_dir,
-                                          filename_hash.hexdigest()+ext)
-            if not os.path.isfile(cache_filename):
-                r = requests.get(img_file)
-                with open(cache_filename, 'wb') as cache_file:
-                    for chunk in r.iter_content(chunk_size=512*1024):
-                        cache_file.write(chunk)
-
-            last_photo = cache_filename
-        return last_photo
-
     def get_random_photo(self):
-        image_list = self.db.get_available_photos()
+        image_qs = Feed.objects.available_photos()
 
         if not self.is_registered:
             return self.config.registration_image_filename
 
-        if not image_list:
-            # FIXME: Fetch any undownloaded photo for display
-            last_photo = self.fetch_photos()
-            if not last_photo:
+        if not image_qs:
+            qs = Feed.objects.download_queue()
+            # Block getting a limited set to make sure something is available
+            refresh_feed(self.config, limit=1)
+
+            # We probably just got registered so start a full feed refresh
+            OneTimeRefreshThread().start()
+            if qs:
+                print "Downloading first image"
+                image = qs.first()
+                download_feed_item(image)
+                return self._image_filename(image)
+            else:
                 if not os.path.isfile(self.config.empty_feed_image_filename):
                     draw_image_message_file(
                         self.config.empty_feed_image_filename,
                         "No images found in feed"
                     )
                 return self.config.empty_feed_image_filename
-            return last_photo
 
-        return self._image_filename(random.choice(image_list))
+        return self._image_filename(random.choice(image_qs))
 
     def _image_filename(self, image_rec):
-        album_dir = os.path.join(
-            self.config.image_dir,
-            "{provider_name}.{album_pk}".format(image_rec))
-        if not os.path.isdir(album_dir):
-            os.mkdir(album_dir)
-        url = image_rec['url'].split('?')[0]
-        file, ext = os.path.splitext(url)
-        return os.path.join(album_dir,
-                            "{feeditem_pk}".format(image_rec)+ext)
+        return os.path.join(self.config.image_dir, image_rec.local_filename)
 
     @property
     def next_sleep(self):
@@ -179,104 +151,90 @@ class FeedManager(object):
         else:
             return 2500
 
-feed_database_lock = Lock()
+
+def download_feed_item(item, config=None):
+    if not config:
+        config = MomentConfig()
+    result = requests.get(item.url)
+    filename = os.path.join(config.image_dir,
+                            item.local_filename)
+    dirname = os.path.dirname(filename)
+    if not os.path.isdir(dirname):
+        os.mkdir(dirname)
+
+    with open(filename, 'wb') as cache_file:
+        for chunk in result.iter_content(chunk_size=512*1024):
+            cache_file.write(chunk)
+
+    item.downloaded = True
+    item.save()
 
 
-@contextmanager
-def sqlite_connection(filename):
-    connection = None
-    with feed_database_lock:
+class DownloadThread(threading.Thread):
+    daemon = True
+
+    def run(self):
+        fm = FeedManager()
+        # Sleep initially to give RefreshFeedThread time to run
+        time.sleep(30)
+        while True:
+            qs = Feed.objects.download_queue()
+            for item in qs:
+                print "Downloading image: {}".format(item.local_filename)
+                download_feed_item(item, fm.config)
+                time.sleep(10)
+
+            print "DownloadThread sleeping..."
+            time.sleep(300)
+
+
+def refresh_feed(config, limit=None):
+    res = requests.get(config.feed_url,
+               params={'device_token': config.moment_token})
+    feed_data = res.json()
+    created = 0
+    for item in feed_data.get('images', list()):
         try:
-            connection = sqlite3.connect(filename)
-            yield connection
-        finally:
-            if connection:
-                connection.commit()
-                connection.close()
+            Feed.objects.get(provider_name=item['provider_name'],
+                             feeditem_pk=item['feeditem_pk'])
+        except Feed.DoesNotExist:
+            rec = Feed.objects.create(**item)
+            created += 1
+            print "Added file: {}".format(rec.local_filename)
+            if limit and created >= limit:
+                break
 
 
-class FeedDatabase(object):
+class RefreshFeedThread(threading.Thread):
+    daemon = True
 
-    def __init__(self):
-        self.db_file = os.path.join(MOMENT_HOME, 'feed.sqlite3')
+    def run(self):
+        fm = FeedManager()
+        while True:
+            refresh_feed(fm.config)
 
-        with sqlite_connection(self.db_file) as conn:
-            q = "select name from sqlite_master where type='table';"
-            if 'feed' not in [t[0] for t in conn.execute(q)]:
-                q = """
-                CREATE TABLE feed (
-                  id integer primary key,
-                  moment_id varchar,
-                  provider_name varchar,
-                  album_pk integer not null,
-                  feeditem_pk integer not null,
-                  url varchar,
-                  downloaded integer,
-                  revoked integer
-                )
-                """
-                conn.execute(q)
+            print "Feed refresh sleeping..."
+            time.sleep(600)
 
-    def add_feeditems(self, feeditems):
-        insert_items = list()
-        with sqlite_connection(self.db_file) as conn:
-            for item in feeditems:
-                q = """
-                  SELECT * FROM feed
-                  WHERE moment_id=:moment_id and
-                        provider_name=:provider_name and
-                        album_pk=:album_pk and feeditem_pk=:feeditem_pk
-                """
-                r = conn.execute(q, item)
-                if not r.fetchone():
-                    q = """
-                    INSERT INTO feed (
-                      moment_id,
-                      provider_name,
-                      album_pk,
-                      feeditem_pk,
-                      url,
-                      downloaded,
-                      revoked
-                    ) values (:moment_id, :provider_name,
-                              :album_pk, :feeditem_pk, :url, 0, 0)
-                    """
-                    r = conn.execute(q, item)
-                    print r.fetchone()
 
-    def get_available_photos(self):
-        with sqlite_connection(self.db_file) as conn:
-            columns = ['moment_id', 'provider_name',
-                       'album_pk', 'feeditem_pk', 'url']
-            q = """
-            SELECT {}
-            FROM feed WHERE downloaded = 1 AND revoked = 0
-            """.format(','.join(columns))
-            return [dict(zip(columns, row)) for row in conn.execute(q)]
+class OneTimeRefreshThread(threading.Thread):
+    daemon = True
 
-    def update_status(self, item_list, downloaded=None, revoked=None):
-        with sqlite_connection(self.db_file) as conn:
-            if downloaded is not None:
-                value = 1 if downloaded else 0
-                q = """
-                    UPDATE feed SET downloaded=?
-                    WHERE provider_name=? and feeditem_pk=?
-                """
-                for item in item_list:
-                    conn.execute(q, value,
-                                 item['provider_name'],
-                                 item['feeditem_pk'])
-            if revoked is not None:
-                value = 1 if revoked else 0
-                q = """
-                    UPDATE feed SET revoked=?
-                    WHERE provider_name=? and feeditem_pk=?
-                """
-                for item in item_list:
-                    conn.execute(q, value,
-                                 item['provider_name'],
-                                 item['feeditem_pk'])
+    def run(self):
+        print "Starting one time refresh..."
+        fm = FeedManager()
+        # Get enough images to display while the full feed downloads
+        refresh_feed(fm.config, limit=20)
+        self._download_queue(fm.config)
+        print "Initial download in one time refresh completed..."
 
-    def revoke_all(self):
-        with sqlite_connection(self.db_file) as conn:
-            conn.execute("UPDATE feed set revoked=1")
+        # Get everything else
+        refresh_feed(fm.config)
+        self._download_queue(fm.config)
+        print "Finishing one time refresh..."
+
+    def _download_queue(self, config):
+        for item in Feed.objects.download_queue():
+            print "Downloading image: {}".format(item.local_filename)
+            download_feed_item(item, config)
+            time.sleep(10)
