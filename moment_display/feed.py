@@ -225,16 +225,13 @@ class OneTimeRefreshThread(threading.Thread):
         fm = FeedManager()
         # Get enough images to display while the full feed downloads
         refresh_feed(fm.config, limit=20)
-        self._download_queue(fm.config)
+
+        # Limit queryset in case another feed refresh expanded it
+        for item in Feed.objects.download_queue()[:20]:
+            print "Downloading image: {}".format(item.local_filename)
+            download_feed_item(item, fm.config)
         print "Initial download in one time refresh completed..."
 
-        # Get everything else
+        # Get everything from feed, but leave for the normal download thread
         refresh_feed(fm.config)
-        self._download_queue(fm.config)
         print "Finishing one time refresh..."
-
-    def _download_queue(self, config):
-        for item in Feed.objects.download_queue():
-            print "Downloading image: {}".format(item.local_filename)
-            download_feed_item(item, config)
-            time.sleep(10)
