@@ -3,6 +3,7 @@ import json
 import random
 import time
 import threading
+import logging
 
 import requests
 
@@ -10,6 +11,8 @@ from django.conf import settings
 
 from .image import draw_image_message_file
 from .models import Feed
+
+log = logging.getLogger(__name__)
 
 _CONFIG_DEFAULTS = (
     ('base_url', 'http://localhost:8000'),
@@ -37,7 +40,7 @@ class MomentConfig(object):
                 with open(self.cfg_file) as cfg:
                     self.cfg_dict = json.loads(cfg.read())
             except Exception as e:
-                print "Error loading config: {}".format(e)
+                log.error("Error loading config: {}".format(e))
 
         for key, default in _CONFIG_DEFAULTS:
             setattr(self, key, self.cfg_dict.get(key, default))
@@ -126,7 +129,7 @@ class FeedManager(object):
             # We probably just got registered so start a full feed refresh
             OneTimeRefreshThread().start()
             if qs:
-                print "Downloading first image"
+                logging.info("Downloading first image")
                 image = qs.first()
                 download_feed_item(image)
                 return self._image_filename(image)
@@ -179,12 +182,16 @@ class DownloadThread(threading.Thread):
         time.sleep(30)
         while True:
             qs = Feed.objects.download_queue()
-            for item in qs:
-                print "Downloading image: {}".format(item.local_filename)
-                download_feed_item(item, fm.config)
-                time.sleep(10)
+            try:
+                for item in qs:
+                    log.info("Downloading image: {}"
+                             .format(item.local_filename))
+                    download_feed_item(item, fm.config)
+                    time.sleep(10)
+            except Exception as e:
+                log.error("Error downloading feed image: {}".format(str(e)))
 
-            print "DownloadThread sleeping..."
+            log.debug("DownloadThread sleeping...")
             time.sleep(300)
 
 
@@ -195,14 +202,33 @@ def refresh_feed(config, limit=None):
     created = 0
     for item in feed_data.get('images', list()):
         try:
-            Feed.objects.get(provider_name=item['provider_name'],
+            rec = Feed.objects.get(provider_name=item['provider_name'],
                              feeditem_pk=item['feeditem_pk'])
+            if rec.revoked:
+                rec.revoked = False
+                rec.save()
         except Feed.DoesNotExist:
             rec = Feed.objects.create(**item)
             created += 1
-            print "Added file: {}".format(rec.local_filename)
+            log.debug("Added file: {}".format(rec.local_filename))
             if limit and created >= limit:
                 break
+
+    feed_albums = feed_data.get('albums', dict())
+    for provider, albums in feed_albums.items():
+        revoke_qs = Feed.objects.filter(provider_name=provider, revoked=False)\
+            .exclude(album_pk__in=albums)
+        count = revoke_qs.count()
+        if count:
+            log.info("Revoking {} {} feed items".format(count, provider))
+            revoke_qs.update(revoked=True)
+    revoke_qs = Feed.objects.exclude(provider_name__in=feed_albums.keys())
+    provider_list = sorted(set(revoke_qs.values_list('provider_name',
+                                                     flat=True)))
+    if provider_list:
+        log.info("Revoking {} items from {}".format(revoke_qs.count(),
+                                                    provider_list))
+        revoke_qs.update(revoked=True)
 
 
 class RefreshFeedThread(threading.Thread):
@@ -213,7 +239,7 @@ class RefreshFeedThread(threading.Thread):
         while True:
             refresh_feed(fm.config)
 
-            print "Feed refresh sleeping..."
+            log.debug("Feed refresh sleeping...")
             time.sleep(600)
 
 
@@ -221,17 +247,17 @@ class OneTimeRefreshThread(threading.Thread):
     daemon = True
 
     def run(self):
-        print "Starting one time refresh..."
+        log.info("Starting one time refresh...")
         fm = FeedManager()
         # Get enough images to display while the full feed downloads
         refresh_feed(fm.config, limit=20)
 
         # Limit queryset in case another feed refresh expanded it
         for item in Feed.objects.download_queue()[:20]:
-            print "Downloading image: {}".format(item.local_filename)
+            log.info("Downloading image: {}".format(item.local_filename))
             download_feed_item(item, fm.config)
-        print "Initial download in one time refresh completed..."
+        log.info("Initial download in one time refresh completed...")
 
         # Get everything from feed, but leave for the normal download thread
         refresh_feed(fm.config)
-        print "Finishing one time refresh..."
+        log.info("Finishing one time refresh...")

@@ -2,11 +2,14 @@ import wx
 import time
 import sys
 import traceback
+import logging
 
 import gettext
 
 from .image import prep_image
 from .feed import FeedManager
+
+log = logging.getLogger(__name__)
 
 class ImagePanel(wx.Panel):
     def __init__(self, parent):
@@ -39,10 +42,10 @@ class ImagePanel(wx.Panel):
             else:
                 self.bitmap1 = wx.StaticBitmap(self, -1, bmp1, (0, 0))
         except IOError as e:
-            print e
-            raise SystemExit
+            log.critical("Error updating image {}: {}".format(filename, e))
+            # raise SystemExit
         except Exception as e:
-            print "Unexpected exception while updating image: {}".format(e)
+            log.error("Unexpected exception while updating image: {}".format(e))
             traceback.print_exc()
 
 
@@ -64,14 +67,14 @@ class MyFrame(wx.Frame):
         self.Bind(wx.EVT_CHAR_HOOK, self.OnKeyUP)
 
     def update(self, event):
-        print "Updated: {}".format(time.ctime())
+        log.debug("Updated: {}".format(time.ctime()))
         self.timer.Stop()
         self.client.update_image(self.Size.width, self.Size.height)
         self.timer.Start(self.client.feed_manager.next_sleep)
 
     def OnKeyUP(self, event):
         code = event.GetKeyCode()
-        print "keypress: {}".format(code)
+        log.debug("keypress: {}".format(code))
         if code == wx.WXK_ESCAPE:
             sys.exit(0)
 

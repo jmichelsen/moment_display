@@ -1,5 +1,9 @@
 import os
+import logging
+
 from PIL import Image, ImageFilter, ImageDraw, ImageFont
+
+log = logging.getLogger(__name__)
 
 
 def scale_display_size(display_tuple, factor):
@@ -12,14 +16,14 @@ def prep_image(filename, width, height):
         # Copy the image in memory to avoid closed file errors later
         img = Image.open(imagefile)
         if img.size == (width, height):
-            print "No prep for {}".format(filename)
+            log.debug("No prep for {}".format(filename))
             return img.copy()
         background = img.copy()
     w, h = img.size
 
-    print "prep_image({}) {} -> {}".format(filename,
-                                           img.size,
-                                           (width, height))
+    log.debug("prep_image({}) {} -> {}".format(filename,
+                                               img.size,
+                                               (width, height)))
 
     background = background.resize(scale_display_size((width, height), 0.1),
                                    Image.ANTIALIAS)
