@@ -1,0 +1,3 @@
+include moment_display/FreeSans.ttf
+include VERSION.txt
+include requirements.pip
