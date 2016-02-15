@@ -11,6 +11,7 @@ from .feed import FeedManager
 
 log = logging.getLogger(__name__)
 
+
 class ImagePanel(wx.Panel):
     def __init__(self, parent):
         self.feed_manager = FeedManager()
