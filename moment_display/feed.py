@@ -15,7 +15,7 @@ from .models import Feed
 log = logging.getLogger(__name__)
 
 _CONFIG_DEFAULTS = (
-    ('base_url', 'http://localhost:8000'),
+    ('base_url', 'https://momently.io'),
     ('moment_token', None),
     ('registration_code', None),
     ('photo_display_seconds', 15),
