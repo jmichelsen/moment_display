@@ -5,6 +5,7 @@ from moment_display import feed
 display_types = [
     'wxPython',
     'gtk',
+    'pygame',
 ]
 
 
@@ -13,10 +14,14 @@ class Command(BaseCommand):
         parser.add_argument('--toolkit',
                             dest='toolkit',
                             choices=display_types,
-                            default='gtk')
+                            default='pygame')
         parser.add_argument('--disable-threads',
                             action='store_true',
                             dest='disable_threads',
+                            default=False)
+        parser.add_argument('--testmode',
+                            action='store_true',
+                            dest='testmode',
                             default=False)
 
     def handle(self, *args, **options):
@@ -34,5 +39,8 @@ class Command(BaseCommand):
         elif toolkit == 'wxPython':
             from moment_display import xdisplay
             xdisplay.run_x()
+        elif toolkit == 'pygame':
+            from moment_display import pygame_display
+            pygame_display.run(**options)
         else:
             print "Unknown toolkit type: {}".format(toolkit)
