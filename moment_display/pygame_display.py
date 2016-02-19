@@ -25,7 +25,7 @@ class Display:
             self.main_surface = pygame.display.set_mode(self.resolution,
                                                         pygame.FULLSCREEN)
 
-        pygame.time.set_timer(pygame.USEREVENT + 1, 5000)
+        pygame.time.set_timer(pygame.USEREVENT + 1, 25000)
 
     def update_picture(self):
         try:
@@ -38,6 +38,7 @@ class Display:
                            subsampling=0)
             image = pygame.image.load(outfile)
             self.main_surface.blit(image, (0,0))
+            pygame.display.update()
         except Exception as e:
             log.error("Unexpected exception while updating image: "
                       "{}".format(e))
