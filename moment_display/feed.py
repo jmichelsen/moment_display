@@ -4,12 +4,14 @@ import random
 import time
 import threading
 import logging
+from StringIO import StringIO
+import traceback
 
 import requests
 
 from django.conf import settings
 
-from .image import draw_image_message_file
+from .image import draw_image_message_file, prep_image
 from .models import Feed
 
 log = logging.getLogger(__name__)
@@ -115,7 +117,7 @@ class FeedManager(object):
             return False
         return status.get('registered', False)
 
-    def get_random_photo(self):
+    def get_random_photo(self, x_size, y_size):
         image_qs = Feed.objects.available_photos()
 
         if not self.is_registered:
@@ -132,7 +134,7 @@ class FeedManager(object):
                 logging.info("Downloading first image")
                 image = qs.first()
                 download_feed_item(image)
-                return self._image_filename(image)
+                return self._image_file(image, x_size, y_size)
             else:
                 if not os.path.isfile(self.config.empty_feed_image_filename):
                     draw_image_message_file(
@@ -141,10 +143,29 @@ class FeedManager(object):
                     )
                 return self.config.empty_feed_image_filename
 
-        return self._image_filename(random.choice(image_qs))
+        return self._image_file(random.choice(image_qs), x_size, y_size)
 
-    def _image_filename(self, image_rec):
-        return os.path.join(self.config.image_dir, image_rec.local_filename)
+    def _image_file(self, image_rec, x_size, y_size):
+        filename = None
+        try:
+            filename = os.path.join(self.config.image_dir,
+                                    image_rec.local_filename)
+            pil_image = prep_image(filename, x_size, y_size)
+            file_buffer = StringIO()
+            pil_image = pil_image.convert('RGB')
+            pil_image.save(file_buffer, "JPEG")
+            file_buffer.seek(0)
+            return file_buffer
+        except Exception as e:
+            if filename:
+                log.error("Error processing file: {}".format(filename))
+                # Remove image from rotation
+                # TODO: Report back that the image couldn't be processed
+                # image_rec.revoked = True
+                # image_rec.save()
+            log.error("Unexpected exception while updating image: "
+                      "{}".format(e))
+            traceback.print_exc()
 
     @property
     def next_sleep(self):

@@ -14,7 +14,7 @@ def scale_display_size(display_tuple, factor):
 def prep_image(filename, width, height):
     with open(filename) as imagefile:
         # Copy the image in memory to avoid closed file errors later
-        img = Image.open(imagefile)
+        img = Image.open(imagefile).convert('RGB')
         if img.size == (width, height):
             log.debug("No prep for {}".format(filename))
             return img.copy()

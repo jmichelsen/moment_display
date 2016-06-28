@@ -6,7 +6,6 @@ gi.require_version('Gtk', '3.0')
 from gi.repository import Gtk, GLib
 # import gtk
 
-from .image import prep_image
 from .feed import FeedManager
 
 log = logging.getLogger(__name__)
@@ -30,14 +29,13 @@ class MomentGtk:
         # if not self.image.context:
         #     return True
         try:
-            filename = self.feed_manager.get_random_photo()
             rect = self.image.get_allocation()
             size = self.window.get_size()
-            pil_image = prep_image(filename, *size)
+            file_buffer = self.feed_manager.get_random_photo(*size)
+
             outfile = '/tmp/SuperDPF-gtk-image.jpg'
-            pil_image.save(outfile, optimize=False,
-                   progressive=True, quality=100,
-                   subsampling=0)
+            with open(outfile, mode='w') as open_outfile:
+                open_outfile.write(file_buffer.read())
             self.image.set_from_file(outfile)
         except Exception as e:
             traceback.print_exc()
