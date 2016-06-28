@@ -4,7 +4,6 @@ import pygame
 import logging
 import traceback
 
-from .image import prep_image
 from .feed import FeedManager
 
 log = logging.getLogger(__name__)
@@ -28,18 +27,16 @@ class Display:
         pygame.time.set_timer(pygame.USEREVENT + 1, 25000)
 
     def update_picture(self):
+        filename = None
         try:
-            filename = self.feed_manager.get_random_photo()
-            pil_image = prep_image(filename, *self.resolution)
-
-            outfile = '/tmp/SuperDPF-image.jpg'
-            pil_image.save(outfile, optimize=False,
-                           progressive=True, quality=100,
-                           subsampling=0)
-            image = pygame.image.load(outfile)
+            file_buffer = self.feed_manager.get_random_photo(*self.resolution)
+            image = pygame.image.load(file_buffer)
             self.main_surface.blit(image, (0,0))
             pygame.display.update()
         except Exception as e:
+            if filename:
+                log.error("Error processing file: {}".format(filename))
+                self.feed_manager.reject_file(filename)
             log.error("Unexpected exception while updating image: "
                       "{}".format(e))
             traceback.print_exc()

@@ -21,14 +21,11 @@ class ImagePanel(wx.Panel):
 
     def update_image(self, width, height):
         try:
-            filename = self.feed_manager.get_random_photo()
-            pil_image = prep_image(filename, width, height)
-            self.update_count += 1
+            file_buffer = self.feed_manager.get_random_photo(width, height)
 
             outfile = '/tmp/SuperDPF-image.jpg'
-            pil_image.save(outfile, optimize=False,
-                           progressive=True, quality=100,
-                           subsampling=0)
+            with open(outfile, mode='w') as open_outfile:
+                open_outfile.write(file_buffer.read())
 
             bmp1 = wx.Image(outfile, wx.BITMAP_TYPE_ANY).ConvertToBitmap()
 

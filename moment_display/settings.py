@@ -152,5 +152,9 @@ LOGGING = {
             'handlers': ['console', 'syslog'],
             'level': 'ERROR',
         },
+        'requests': {
+            'handlers': ['console', 'syslog'],
+            'level': 'ERROR',
+        },
     },
 }

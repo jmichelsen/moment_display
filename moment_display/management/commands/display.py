@@ -1,3 +1,6 @@
+import threading
+import time
+
 from django.core.management.base import BaseCommand
 
 from moment_display import feed
@@ -25,22 +28,82 @@ class Command(BaseCommand):
                             default=False)
 
     def handle(self, *args, **options):
-        if not options['disable_threads']:
-            rt = feed.RefreshFeedThread()
-            rt.start()
-            dt = feed.DownloadThread()
-            dt.start()
+        threads = list()
         toolkit = options['toolkit']
         print "Window toolkit: {}".format(toolkit)
 
         if toolkit == 'gtk':
-            from moment_display import xgtk
-            xgtk.run_x()
+            threads.append(ThreadEntry(GtkThread, list(), dict(),
+                                       auto_restart=False))
         elif toolkit == 'wxPython':
-            from moment_display import xdisplay
-            xdisplay.run_x()
+            threads.append(ThreadEntry(WxPythonThread, list(), dict(),
+                                       auto_restart=False))
         elif toolkit == 'pygame':
-            from moment_display import pygame_display
-            pygame_display.run(**options)
+            threads.append(ThreadEntry(PyGameThread, [options], dict(),
+                                       auto_restart=False))
         else:
             print "Unknown toolkit type: {}".format(toolkit)
+            return
+
+        if not options['disable_threads']:
+            threads.append(ThreadEntry(feed.RefreshFeedThread, list(), dict()))
+            threads.append(ThreadEntry(feed.DownloadThread, list(), dict()))
+
+        try:
+            while True:
+                for thread in threads:
+                    thread.insure_running()
+                time.sleep(2)
+        except thread.ThreadShutdown:
+            pass
+
+
+class ThreadEntry(object):
+    class ThreadShutdown(Exception):
+        pass
+
+    def __init__(self, t_class, t_args, t_kwargs, auto_restart=True):
+        self.t_class = t_class
+        self.t_args = t_args
+        self.t_kwargs = t_kwargs
+        self.instance = None
+        self.auto_restart = auto_restart
+
+    def insure_running(self):
+        if self.instance is None:
+            self._start_instance()
+        elif not self.instance.is_alive():
+            if self.auto_restart:
+                print "Restarting instance of {}".format(
+                    self.t_class.__name__
+                )
+                self._start_instance()
+            else:
+                raise self.ThreadShutdown()
+
+    def _start_instance(self):
+        self.instance = self.t_class(*self.t_args, **self.t_kwargs)
+        self.instance.start()
+        time.sleep(.05)
+
+
+class GtkThread(threading.Thread):
+    def run(self):
+        from moment_display import xgtk
+        xgtk.run_x()
+
+
+class WxPythonThread(threading.Thread):
+    def run(self):
+        from moment_display import xdisplay
+        xdisplay.run_x()
+
+
+class PyGameThread(threading.Thread):
+    def __init__(self, options, *args, **kwargs):
+        super(PyGameThread, self).__init__(*args, **kwargs)
+        self.options = options
+
+    def run(self):
+        from moment_display import pygame_display
+        pygame_display.run(**self.options)
