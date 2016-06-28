@@ -153,18 +153,16 @@ class FeedManager(object):
             pil_image = prep_image(filename, x_size, y_size)
             file_buffer = StringIO()
             pil_image = pil_image.convert('RGB')
-            pil_image.save(file_buffer, "JPEG", optimize=False,
-                           progressive=True, quality=100,
-                           subsampling=0)
+            pil_image.save(file_buffer, "JPEG")
             file_buffer.seek(0)
             return file_buffer
         except Exception as e:
             if filename:
                 log.error("Error processing file: {}".format(filename))
                 # Remove image from rotation
-                # TODO: Report back that image couldn't be processed
-                image_rec.revoked = True
-                image_rec.save()
+                # TODO: Report back that the image couldn't be processed
+                # image_rec.revoked = True
+                # image_rec.save()
             log.error("Unexpected exception while updating image: "
                       "{}".format(e))
             traceback.print_exc()
