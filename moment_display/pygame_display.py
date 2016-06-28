@@ -3,6 +3,7 @@
 import pygame
 import logging
 import traceback
+import time
 
 from .feed import FeedManager
 
@@ -52,6 +53,7 @@ class Display:
                         pygame.quit()
                 elif event.type == pygame.USEREVENT + 1:
                     self.update_picture()
+            time.sleep(.1)
 
 
 def run(**options):
