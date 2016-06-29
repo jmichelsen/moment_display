@@ -21,6 +21,7 @@ _CONFIG_DEFAULTS = (
     ('moment_token', None),
     ('registration_code', None),
     ('photo_display_seconds', 15),
+    ('registered', False),
 )
 
 
@@ -100,7 +101,11 @@ class FeedManager(object):
 
     @property
     def is_registered(self):
-        self._last_registration_status = self.update_registration_status()
+        try:
+            self._last_registration_status = self.update_registration_status()
+        except requests.ConnectionError as e:
+            log.error("HTTP Timeout while checking registration: {}".format(e))
+            return self.config.registered
         return self._last_registration_status
 
     def update_registration_status(self):
@@ -115,7 +120,11 @@ class FeedManager(object):
             not status.get('pending_registration'):
             self.begin_registration()
             return False
-        return status.get('registered', False)
+        registered = status.get('registered', False)
+        if self.config.registered != registered:
+            self.config.registered = registered
+            self.config.save()
+        return registered
 
     def get_random_photo(self, x_size, y_size):
         image_qs = Feed.objects.available_photos()
