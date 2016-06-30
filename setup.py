@@ -12,6 +12,7 @@ import subprocess
 
 install_reqs = parse_requirements('requirements.pip',
                                   session=PipSession())
+install_requires = [str(ir.req) for ir in install_reqs if ir.req]
 
 packages = []
 
@@ -62,4 +63,4 @@ setup(name="MomentDisplay",
       entry_points={
           'console_scripts': ['moment-display=moment_display.cli:display_main']
       },
-      install_requires=[str(ir.req) for ir in install_reqs])
+      install_requires=install_requires)
