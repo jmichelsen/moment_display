@@ -1,5 +1,5 @@
 Django==1.8.8
+Pillow==2.6.1
 requests==2.6.0
 
 hg+http://bitbucket.org/pygame/pygame
-Pillow==3.2.0
